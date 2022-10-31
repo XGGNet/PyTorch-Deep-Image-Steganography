@@ -194,7 +194,7 @@ def main():
         test_dataset = MyImageFolder(
             testdir,
             transforms.Compose([
-                transforms.Resize([opt.imageSize, opt.imageSize]),
+                transforms.Resize([opt.imageSize, opt.imageSize]), # 有resize
                 transforms.ToTensor(),
             ]))
         assert test_dataset
@@ -305,16 +305,16 @@ def train(train_loader, epoch, Hnet, Rnet, criterion):
 
         container_img = Hnet(concat_imgv)  # put concat_image into H-net and get container image
         errH = criterion(container_img, cover_imgv)  # loss between cover and container
-        Hlosses.update(errH.data[0], this_batch_size)
+        Hlosses.update(errH.item(), this_batch_size)
 
         rev_secret_img = Rnet(container_img)  # put concatenated image into R-net and get revealed secret image
         secret_imgv = Variable(secret_img)
         errR = criterion(rev_secret_img, secret_imgv)  # loss between secret image and revealed secret image
-        Rlosses.update(errR.data[0], this_batch_size)
+        Rlosses.update(errR.item(), this_batch_size)
 
         betaerrR_secret = opt.beta * errR
         err_sum = errH + betaerrR_secret
-        SumLosses.update(err_sum.data[0], this_batch_size)
+        SumLosses.update(err_sum.item(), this_batch_size)
 
         err_sum.backward()
 
@@ -389,12 +389,12 @@ def validation(val_loader, epoch, Hnet, Rnet, criterion):
 
         container_img = Hnet(concat_imgv)
         errH = criterion(container_img, cover_imgv)
-        Hlosses.update(errH.data[0], this_batch_size)
+        Hlosses.update(errH.item(), this_batch_size)
 
         rev_secret_img = Rnet(container_img)
         secret_imgv = Variable(secret_img, volatile=True)
         errR = criterion(rev_secret_img, secret_imgv)
-        Rlosses.update(errR.data[0], this_batch_size)
+        Rlosses.update(errR.item(), this_batch_size)
 
         if i % 50 == 0:
             save_result_pic(this_batch_size, cover_img, container_img.data, secret_img, rev_secret_img.data, epoch, i,
@@ -450,12 +450,12 @@ def test(test_loader, epoch, Hnet, Rnet, criterion):
 
         container_img = Hnet(concat_imgv)  # take concat_img as input of H-net and get the container_img
         errH = criterion(container_img, cover_imgv)  # H-net reconstructed error
-        Hlosses.update(errH.data[0], this_batch_size)
+        Hlosses.update(errH.item(), this_batch_size)
 
         rev_secret_img = Rnet(container_img)  # containerImg as input of R-net and get "rev_secret_img"
         secret_imgv = Variable(secret_img, volatile=True)  # secret_imgv as label of R-net
         errR = criterion(rev_secret_img, secret_imgv)  # R-net reconstructed error
-        Rlosses.update(errR.data[0], this_batch_size)
+        Rlosses.update(errR.item(), this_batch_size)
         save_result_pic(this_batch_size, cover_img, container_img.data, secret_img, rev_secret_img.data, epoch, i,
                         opt.testPics)
 
