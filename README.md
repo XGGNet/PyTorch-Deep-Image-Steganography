@@ -1,3 +1,9 @@
+# DeepStega used in StegaNeRF
+
+一些结果保存在  https://drive.google.com/drive/folders/1Gx834XPOsVIgxvXUk3E-QkuRHkRj_qzH?usp=share_link
+
+原始respo link https://github.com/arnoweng/PyTorch-Deep-Image-Steganography
+
 # PyTorch-Deep-Image-Steganography
 
 <img src = 'result/title.png'>

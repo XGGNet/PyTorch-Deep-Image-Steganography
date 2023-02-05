@@ -37,9 +37,8 @@ from models.RevealNet import RevealNet
 
 import imageio
 import cv2
-import numpy as np
 
-from matplotlib import pyplot as plt
+from tqdm import tqdm
 
 DATA_DIR = '/n/liyz/data/deep-steganography-dataset/'
 
@@ -102,31 +101,6 @@ parser.add_argument('--hostname', default=socket.gethostname(), help='the  host 
 parser.add_argument('--debug', type=bool, default=False, help='debug mode do not create folders')
 parser.add_argument('--logFrequency', type=int, default=10, help='the frequency of print the log on the console')
 parser.add_argument('--resultPicFrequency', type=int, default=100, help='the frequency of save the resultPic')
-
-
-def viridis_cmap(gray: np.ndarray):
-    """
-    Visualize a single-channel image using matplotlib's viridis color map
-    yellow is high value, blue is low
-    :param gray: np.ndarray, (H, W) or (H, W, 1) unscaled
-    :return: (H, W, 3) float32 in [0, 1]
-    """
-    colored = plt.cm.viridis(plt.Normalize()(gray.squeeze()))[..., :-1]
-    # pdb.set_trace()
-    return colored.astype(np.float32)
-
-def unscaled_viridis_cmap(gray: np.ndarray, scale=1):
-    """
-    Visualize a single-channel image using matplotlib's viridis color map
-    yellow is high value, blue is low
-    :param gray: np.ndarray, (H, W) or (H, W, 1) unscaled
-    :return: (H, W, 3) float32 in [0, 1]
-    """
-    # pdb.set_trace()
-    colored = plt.cm.viridis((gray.squeeze())*scale )[..., :-1]
-    # pdb.set_trace()
-    return colored.astype(np.float32)
-
 
 
 # custom weights initialization called on netG and netD
@@ -214,121 +188,167 @@ def main():
     print_log(str(opt), logPath)
     save_current_codes(opt.outcodes)
 
-    if opt.test == '':
-        # tensorboardX writer
-        writer = SummaryWriter(comment='**' + opt.remark)
-        ##############   get dataset   ############################
-        traindir = os.path.join(DATA_DIR, 'train')
-        valdir = os.path.join(DATA_DIR, 'val')
-        train_dataset = MyImageFolder(
-            traindir,
-            transforms.Compose([
-                transforms.Resize([opt.imageSize, opt.imageSize]),  # resize to a given size
-                transforms.ToTensor(),
-            ]))
-        val_dataset = MyImageFolder(
-            valdir,
-            transforms.Compose([
-                transforms.Resize([opt.imageSize, opt.imageSize]),
-                transforms.ToTensor(),
-            ]))
-        assert train_dataset
-        assert val_dataset
-    else:
-        opt.Hnet = "./checkPoint/netH_epoch_73,sumloss=0.000447,Hloss=0.000258.pth"
-        opt.Rnet = "./checkPoint/netR_epoch_73,sumloss=0.000447,Rloss=0.000252.pth"
-        testdir = opt.test
+    '''
+    10-31 one4all
+    '''
+    # dataset_type = 'llff' 
+    # # opt.imageH = 1024
+    # opt.imageW = 768
 
-        '''
-        cover_folder
-        '''
-        test_dataset = MyImageFolder(
-            testdir,
-            transforms.Compose([
-                transforms.Resize([opt.imageW, opt.imageH]), # 有resize
-                transforms.ToTensor(),
-            ]))
-        
-        secret_dir = 'secret_images2'
-        secret_dataset = MyImageFolder(
-            secret_dir,
-            transforms.Compose([
-                transforms.Resize([opt.imageW, opt.imageH]), # 有resize
-                transforms.ToTensor(),
-            ]))
-        assert len( secret_dataset) == 1
+    # opt.saveH = 1008
+    # opt.saveW = 756
 
-        assert test_dataset
 
-    Hnet = UnetGenerator(input_nc=6, output_nc=3, num_downs=7, output_function=nn.Sigmoid)
-    Hnet.cuda()
-    Hnet.apply(weights_init)
-    # whether to load pre-trained model
-    if opt.Hnet != "":
-        Hnet.load_state_dict(torch.load(opt.Hnet))
-    if opt.ngpu > 1:
-        Hnet = torch.nn.DataParallel(Hnet).cuda()
-    print_network(Hnet)
+    dataset_type = 'synthetic'
+    opt.imageH = 896
+    opt.imageW = 896
 
-    Rnet = RevealNet(output_function=nn.Sigmoid)
-    Rnet.cuda()
-    Rnet.apply(weights_init)
-    if opt.Rnet != '':
-        Rnet.load_state_dict(torch.load(opt.Rnet))
-    if opt.ngpu > 1:
-        Rnet = torch.nn.DataParallel(Rnet).cuda()
-    print_network(Rnet)
+    opt.saveH = 800
+    opt.saveW = 800
 
-    # MSE loss
-    criterion = nn.MSELoss().cuda()
-    # training mode
-    if opt.test == '':
-        # setup optimizer
-        optimizerH = optim.Adam(Hnet.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
-        schedulerH = ReduceLROnPlateau(optimizerH, mode='min', factor=0.2, patience=5, verbose=True)
+    dataset_dir = os.path.join('/mnt0/chenxin_li/code/ARF-svox2/data',dataset_type)
+    scene_names = os.listdir(dataset_dir)
 
-        optimizerR = optim.Adam(Rnet.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
-        schedulerR = ReduceLROnPlateau(optimizerR, mode='min', factor=0.2, patience=8, verbose=True)
+    scene_names = ['chair']
 
-        train_loader = DataLoader(train_dataset, batch_size=opt.batchSize,
-                                  shuffle=True, num_workers=int(opt.workers))
-        val_loader = DataLoader(val_dataset, batch_size=opt.batchSize,
-                                shuffle=False, num_workers=int(opt.workers))
-        smallestLoss = 10000
-        print_log("training is beginning .......................................................", logPath)
-        for epoch in range(opt.niter):
-            ######################## train ##########################################
-            train(train_loader, epoch, Hnet=Hnet, Rnet=Rnet, criterion=criterion)
+    
+    for scene_name in scene_names:
+        if scene_name in ['README.txt','.DS_Store']:
+            continue
 
-            ####################### validation  #####################################
-            val_hloss, val_rloss, val_sumloss = validation(val_loader, epoch, Hnet=Hnet, Rnet=Rnet, criterion=criterion)
+        # cover_dir = os.path.join(dataset_dir, scene_name, 'images_4')
+        cover_dir = os.path.join(dataset_dir, scene_name, 'train')
 
-            ####################### adjust learning rate ############################
-            schedulerH.step(val_sumloss)
-            schedulerR.step(val_rloss)
+        result_dir = os.path.join('result_nerf',dataset_type,scene_name)
+        if not os.path.exists(result_dir):
+            os.makedirs(result_dir)
 
-            # save the best model parameters
-            if val_sumloss < globals()["smallestLoss"]:
-                globals()["smallestLoss"] = val_sumloss
-                # do checkPointing
-                torch.save(Hnet.state_dict(),
-                           '%s/netH_epoch_%d,sumloss=%.6f,Hloss=%.6f.pth' % (
-                               opt.outckpts, epoch, val_sumloss, val_hloss))
-                torch.save(Rnet.state_dict(),
-                           '%s/netR_epoch_%d,sumloss=%.6f,Rloss=%.6f.pth' % (
-                               opt.outckpts, epoch, val_sumloss, val_rloss))
+        secret_dir = os.path.join('result_secret',dataset_type,scene_name)
+        if not os.path.exists(secret_dir):
+            os.makedirs(secret_dir)
 
-        writer.close()
+        opt.result_dir = result_dir
+        opt.secret_dir = secret_dir
 
-    # test mode
-    else:
-        test_loader = DataLoader(test_dataset, batch_size=opt.batchSize,
-                                 shuffle=False, num_workers=int(opt.workers))
-        secret_loader = DataLoader(secret_dataset, batch_size=opt.batchSize,
-                                 shuffle=False, num_workers=int(opt.workers))                     
-        
-        test(test_loader, secret_loader, 0, Hnet=Hnet, Rnet=Rnet, criterion=criterion)
-        print("##################   test is completed, the result pic is saved in the ./training/yourcompuer+time/testPics/   ######################")
+        opt.test = cover_dir
+       
+
+
+        if opt.test == '':
+            # tensorboardX writer
+            writer = SummaryWriter(comment='**' + opt.remark)
+            ##############   get dataset   ############################
+            traindir = os.path.join(DATA_DIR, 'train')
+            valdir = os.path.join(DATA_DIR, 'val')
+            train_dataset = MyImageFolder(
+                traindir,
+                transforms.Compose([
+                    transforms.Resize([opt.imageSize, opt.imageSize]),  # resize to a given size
+                    transforms.ToTensor(),
+                ]))
+            val_dataset = MyImageFolder(
+                valdir,
+                transforms.Compose([
+                    transforms.Resize([opt.imageSize, opt.imageSize]),
+                    transforms.ToTensor(),
+                ]))
+            assert train_dataset
+            assert val_dataset
+        else:
+            opt.Hnet = "./checkPoint/netH_epoch_73,sumloss=0.000447,Hloss=0.000258.pth"
+            opt.Rnet = "./checkPoint/netR_epoch_73,sumloss=0.000447,Rloss=0.000252.pth"
+            testdir = opt.test
+
+            '''
+            cover_folder
+            '''
+            test_dataset = MyImageFolder(
+                testdir,
+                transforms.Compose([
+                    transforms.Resize([opt.imageW, opt.imageH]), # 有resize
+                    transforms.ToTensor(),
+                ]))
+            
+            secret_dir = 'secret_images'
+            secret_dataset = MyImageFolder(
+                secret_dir,
+                transforms.Compose([
+                    transforms.Resize([opt.imageW, opt.imageH]), # 有resize
+                    transforms.ToTensor(),
+                ]))
+            assert len( secret_dataset) == 1
+
+            assert test_dataset
+
+        Hnet = UnetGenerator(input_nc=6, output_nc=3, num_downs=7, output_function=nn.Sigmoid)
+        Hnet.cuda()
+        Hnet.apply(weights_init)
+        # whether to load pre-trained model
+        if opt.Hnet != "":
+            Hnet.load_state_dict(torch.load(opt.Hnet))
+        if opt.ngpu > 1:
+            Hnet = torch.nn.DataParallel(Hnet).cuda()
+        print_network(Hnet)
+
+        Rnet = RevealNet(output_function=nn.Sigmoid)
+        Rnet.cuda()
+        Rnet.apply(weights_init)
+        if opt.Rnet != '':
+            Rnet.load_state_dict(torch.load(opt.Rnet))
+        if opt.ngpu > 1:
+            Rnet = torch.nn.DataParallel(Rnet).cuda()
+        print_network(Rnet)
+
+        # MSE loss
+        criterion = nn.MSELoss().cuda()
+        # training mode
+        if opt.test == '':
+            # setup optimizer
+            optimizerH = optim.Adam(Hnet.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+            schedulerH = ReduceLROnPlateau(optimizerH, mode='min', factor=0.2, patience=5, verbose=True)
+
+            optimizerR = optim.Adam(Rnet.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+            schedulerR = ReduceLROnPlateau(optimizerR, mode='min', factor=0.2, patience=8, verbose=True)
+
+            train_loader = DataLoader(train_dataset, batch_size=opt.batchSize,
+                                    shuffle=True, num_workers=int(opt.workers))
+            val_loader = DataLoader(val_dataset, batch_size=opt.batchSize,
+                                    shuffle=False, num_workers=int(opt.workers))
+            smallestLoss = 10000
+            print_log("training is beginning .......................................................", logPath)
+            for epoch in range(opt.niter):
+                ######################## train ##########################################
+                train(train_loader, epoch, Hnet=Hnet, Rnet=Rnet, criterion=criterion)
+
+                ####################### validation  #####################################
+                val_hloss, val_rloss, val_sumloss = validation(val_loader, epoch, Hnet=Hnet, Rnet=Rnet, criterion=criterion)
+
+                ####################### adjust learning rate ############################
+                schedulerH.step(val_sumloss)
+                schedulerR.step(val_rloss)
+
+                # save the best model parameters
+                if val_sumloss < globals()["smallestLoss"]:
+                    globals()["smallestLoss"] = val_sumloss
+                    # do checkPointing
+                    torch.save(Hnet.state_dict(),
+                            '%s/netH_epoch_%d,sumloss=%.6f,Hloss=%.6f.pth' % (
+                                opt.outckpts, epoch, val_sumloss, val_hloss))
+                    torch.save(Rnet.state_dict(),
+                            '%s/netR_epoch_%d,sumloss=%.6f,Rloss=%.6f.pth' % (
+                                opt.outckpts, epoch, val_sumloss, val_rloss))
+
+            writer.close()
+
+        # test mode
+        else:
+            test_loader = DataLoader(test_dataset, batch_size=opt.batchSize,
+                                    shuffle=False, num_workers=int(opt.workers))
+            secret_loader = DataLoader(secret_dataset, batch_size=opt.batchSize,
+                                    shuffle=False, num_workers=int(opt.workers))                     
+            
+            test(test_loader, secret_loader, 0, Hnet=Hnet, Rnet=Rnet, criterion=criterion)
+            print("##################   test is completed, the result pic is saved in the ./training/yourcompuer+time/testPics/   ######################")
 
 
 def train(train_loader, epoch, Hnet, Rnet, criterion):
@@ -493,14 +513,14 @@ def test(test_loader, secret_loader, epoch, Hnet, Rnet, criterion):
     Rlosses = AverageMeter()  # record the Rloss in one epoch
     cnt = 0
     with torch.no_grad():
-        for i, (data,_) in enumerate(test_loader, 0):
+        for i, (data,path) in enumerate(test_loader, 0):
             Hnet.zero_grad()
             Rnet.zero_grad()
             all_pics = data  # allpics contains cover images and secret images
             # this_batch_size = int(all_pics.size()[0] / 2)  # get true batch size of this step 
 
             this_batch_size = int(all_pics.size()[0])
-            secret_img = [data for (data,_) in secret_loader][0]
+            secret_img = [data for data,_ in secret_loader][0]
 
             # first half of images will become cover images, the rest are treated as secret images
             # cover_img = all_pics[0:this_batch_size, :, :, :]  # batchSize,3,256,256
@@ -530,20 +550,21 @@ def test(test_loader, secret_loader, epoch, Hnet, Rnet, criterion):
             Rlosses.update(errR.item(), this_batch_size)
 
 
-            re_covers = F.interpolate(container_img,(756,1008))
+            re_covers = F.interpolate(container_img,(opt.saveW,opt.saveH))
             re_secrets = F.interpolate(rev_secret_img,(128,128))
-            cover_img =  F.interpolate(cover_img,(756,1008))
-
 
             for jk in range( len(re_covers) ):
-                imageio.imwrite( f'results2/re_cover_{cnt}.png', re_covers[jk].permute(1,2,0).cpu().numpy() )
-                imageio.imwrite( f'results2/re_secret_{cnt}.png', re_secrets[jk].permute(1,2,0).cpu().numpy() )
-                residual_map1 = unscaled_viridis_cmap( torch.abs(re_covers[jk]-cover_img[jk]).permute(1,2,0).cpu().numpy().mean(-1), scale=25)
-                residual_map2 = viridis_cmap( torch.abs(re_covers[jk]-cover_img[jk]).permute(1,2,0).cpu().numpy().mean(-1))
-                imageio.imwrite( f'results2/res25_cover_{cnt}.png',  residual_map1)
-                imageio.imwrite( f'results2/res_cover_{cnt}.png',  residual_map2)
+                result_name = os.path.join( opt.result_dir, path[jk].split('/')[-1] )
+                secret_name = os.path.join( opt.secret_dir,  path[jk].split('/')[-1].replace('image','secret') )
+                imageio.imwrite(result_name, re_covers[jk].permute(1,2,0).cpu().numpy() )
+                imageio.imwrite(secret_name, re_secrets[jk].permute(1,2,0).cpu().numpy() )
 
-                cnt += 1
+            # re_secrets = F.interpolate(rev_secret_img,(128,128))
+
+            # for jk in range( len(re_covers) ):
+            #     imageio.imwrite( f'results/re_cover_{cnt}.png', re_covers[jk].permute(1,2,0).cpu().numpy() )
+            #     imageio.imwrite( f'results/re_secret_{cnt}.png', re_secrets[jk].permute(1,2,0).cpu().numpy() )
+            #     cnt += 1
 
 
             # save_result_pic(this_batch_size, cover_img, container_img.data, secret_img, rev_secret_img.data, epoch, i,
@@ -563,21 +584,6 @@ def test(test_loader, secret_loader, epoch, Hnet, Rnet, criterion):
         "#################################################### test end ########################################################")
     return val_hloss, val_rloss, val_sumloss
 
-
-# print training log and save into logFiles
-def print_log(log_info, log_path, console=True):
-    # print info onto the console
-    if console:
-        print(log_info)
-    # debug mode will not write logs into files
-    if not opt.debug:
-        # write logs into log file
-        if not os.path.exists(log_path):
-            fp = open(log_path, "w")
-            fp.writelines(log_info + "\n")
-        else:
-            with open(log_path, 'a+') as f:
-                f.writelines(log_info + '\n')
 
 
 # save result pics, coverImg filePath and secretImg filePath
@@ -624,6 +630,21 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
+
+# print training log and save into logFiles
+def print_log(log_info, log_path, console=True):
+    # print info onto the console
+    if console:
+        print(log_info)
+    # debug mode will not write logs into files
+    if not opt.debug:
+        # write logs into log file
+        if not os.path.exists(log_path):
+            fp = open(log_path, "w")
+            fp.writelines(log_info + "\n")
+        else:
+            with open(log_path, 'a+') as f:
+                f.writelines(log_info + '\n')
 
 
 if __name__ == '__main__':

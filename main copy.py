@@ -22,9 +22,6 @@ import torch.nn.parallel
 import torch.optim as optim
 import torch.utils.data
 import torchvision.utils as vutils
-
-import torch.nn.functional as F
-
 from tensorboardX import SummaryWriter
 from torch.autograd import Variable
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -35,36 +32,17 @@ from data.ImageFolderDataset import MyImageFolder
 from models.HidingUNet import UnetGenerator
 from models.RevealNet import RevealNet
 
-import imageio
-import cv2
-import numpy as np
-
-from matplotlib import pyplot as plt
-
 DATA_DIR = '/n/liyz/data/deep-steganography-dataset/'
-
-'''
-10-31
-1- adjust the image size to be the same as cover
-2- modify the logic in test
-'''
-
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', default="train",
                     help='train | val | test')
 parser.add_argument('--workers', type=int, default=8,
                     help='number of data loading workers')
-parser.add_argument('--batchSize', type=int, default=4,
+parser.add_argument('--batchSize', type=int, default=32,
                     help='input batch size')
 parser.add_argument('--imageSize', type=int, default=256,
                     help='the number of frames')
-
-parser.add_argument('--imageH', type=int, default=1024, # 1008
-                    help='the number of frames')
-parser.add_argument('--imageW', type=int, default=768, # 756
-                    help='the number of frames')
-
 parser.add_argument('--niter', type=int, default=100,
                     help='number of epochs to train for')
 parser.add_argument('--lr', type=float, default=0.001,
@@ -96,37 +74,12 @@ parser.add_argument('--outcodes', default='./training/',
 parser.add_argument('--beta', type=float, default=0.75,
                     help='hyper parameter of beta')
 parser.add_argument('--remark', default='', help='comment')
-parser.add_argument('--test', default='cover_images/flower/images_4/', help='test mode, you need give the test pics dirs in this param')
+parser.add_argument('--test', default='', help='test mode, you need give the test pics dirs in this param')
 
 parser.add_argument('--hostname', default=socket.gethostname(), help='the  host name of the running server')
 parser.add_argument('--debug', type=bool, default=False, help='debug mode do not create folders')
 parser.add_argument('--logFrequency', type=int, default=10, help='the frequency of print the log on the console')
 parser.add_argument('--resultPicFrequency', type=int, default=100, help='the frequency of save the resultPic')
-
-
-def viridis_cmap(gray: np.ndarray):
-    """
-    Visualize a single-channel image using matplotlib's viridis color map
-    yellow is high value, blue is low
-    :param gray: np.ndarray, (H, W) or (H, W, 1) unscaled
-    :return: (H, W, 3) float32 in [0, 1]
-    """
-    colored = plt.cm.viridis(plt.Normalize()(gray.squeeze()))[..., :-1]
-    # pdb.set_trace()
-    return colored.astype(np.float32)
-
-def unscaled_viridis_cmap(gray: np.ndarray, scale=1):
-    """
-    Visualize a single-channel image using matplotlib's viridis color map
-    yellow is high value, blue is low
-    :param gray: np.ndarray, (H, W) or (H, W, 1) unscaled
-    :return: (H, W, 3) float32 in [0, 1]
-    """
-    # pdb.set_trace()
-    colored = plt.cm.viridis((gray.squeeze())*scale )[..., :-1]
-    # pdb.set_trace()
-    return colored.astype(np.float32)
-
 
 
 # custom weights initialization called on netG and netD
@@ -238,26 +191,12 @@ def main():
         opt.Hnet = "./checkPoint/netH_epoch_73,sumloss=0.000447,Hloss=0.000258.pth"
         opt.Rnet = "./checkPoint/netR_epoch_73,sumloss=0.000447,Rloss=0.000252.pth"
         testdir = opt.test
-
-        '''
-        cover_folder
-        '''
         test_dataset = MyImageFolder(
             testdir,
             transforms.Compose([
-                transforms.Resize([opt.imageW, opt.imageH]), # 有resize
+                transforms.Resize([opt.imageSize, opt.imageSize]), # 有resize
                 transforms.ToTensor(),
             ]))
-        
-        secret_dir = 'secret_images2'
-        secret_dataset = MyImageFolder(
-            secret_dir,
-            transforms.Compose([
-                transforms.Resize([opt.imageW, opt.imageH]), # 有resize
-                transforms.ToTensor(),
-            ]))
-        assert len( secret_dataset) == 1
-
         assert test_dataset
 
     Hnet = UnetGenerator(input_nc=6, output_nc=3, num_downs=7, output_function=nn.Sigmoid)
@@ -324,10 +263,7 @@ def main():
     else:
         test_loader = DataLoader(test_dataset, batch_size=opt.batchSize,
                                  shuffle=False, num_workers=int(opt.workers))
-        secret_loader = DataLoader(secret_dataset, batch_size=opt.batchSize,
-                                 shuffle=False, num_workers=int(opt.workers))                     
-        
-        test(test_loader, secret_loader, 0, Hnet=Hnet, Rnet=Rnet, criterion=criterion)
+        test(test_loader, 0, Hnet=Hnet, Rnet=Rnet, criterion=criterion)
         print("##################   test is completed, the result pic is saved in the ./training/yourcompuer+time/testPics/   ######################")
 
 
@@ -483,7 +419,7 @@ def validation(val_loader, epoch, Hnet, Rnet, criterion):
     return val_hloss, val_rloss, val_sumloss
 
 
-def test(test_loader, secret_loader, epoch, Hnet, Rnet, criterion):
+def test(test_loader, epoch, Hnet, Rnet, criterion):
     print(
         "#################################################### test begin ########################################################")
     start_time = time.time()
@@ -491,65 +427,38 @@ def test(test_loader, secret_loader, epoch, Hnet, Rnet, criterion):
     Rnet.eval()
     Hlosses = AverageMeter()  # record the Hloss in one epoch
     Rlosses = AverageMeter()  # record the Rloss in one epoch
-    cnt = 0
-    with torch.no_grad():
-        for i, (data,_) in enumerate(test_loader, 0):
-            Hnet.zero_grad()
-            Rnet.zero_grad()
-            all_pics = data  # allpics contains cover images and secret images
-            # this_batch_size = int(all_pics.size()[0] / 2)  # get true batch size of this step 
+    for i, data in enumerate(test_loader, 0):
+        Hnet.zero_grad()
+        Rnet.zero_grad()
+        all_pics = data  # allpics contains cover images and secret images
+        this_batch_size = int(all_pics.size()[0] / 2)  # get true batch size of this step 
 
-            this_batch_size = int(all_pics.size()[0])
-            secret_img = [data for (data,_) in secret_loader][0]
+        # first half of images will become cover images, the rest are treated as secret images
+        cover_img = all_pics[0:this_batch_size, :, :, :]  # batchSize,3,256,256
+        secret_img = all_pics[this_batch_size:this_batch_size * 2, :, :, :]
 
-            # first half of images will become cover images, the rest are treated as secret images
-            # cover_img = all_pics[0:this_batch_size, :, :, :]  # batchSize,3,256,256
-            # secret_img = all_pics[this_batch_size:this_batch_size * 2, :, :, :]
+        # concat cover and original secret to get the concat_img with 6 channels
+        concat_img = torch.cat([cover_img, secret_img], dim=1)
 
-            cover_img = all_pics
-            secret_img = secret_img.repeat(len(cover_img),1,1,1)
+        if opt.cuda:
+            cover_img = cover_img.cuda()
+            secret_img = secret_img.cuda()
+            concat_img = concat_img.cuda()
 
-            # concat cover and original secret to get the concat_img with 6 channels
-            concat_img = torch.cat([cover_img, secret_img], dim=1)
+        concat_imgv = Variable(concat_img, volatile=True)  # concat_img as input of Hiding net
+        cover_imgv = Variable(cover_img, volatile=True)  # cover_imgv as label of Hiding net
 
-            if opt.cuda:
-                cover_img = cover_img.cuda()
-                secret_img = secret_img.cuda()
-                concat_img = concat_img.cuda()
+        container_img = Hnet(concat_imgv)  # take concat_img as input of H-net and get the container_img
+        errH = criterion(container_img, cover_imgv)  # H-net reconstructed error
+        Hlosses.update(errH.item(), this_batch_size)
 
-            concat_imgv = Variable(concat_img, volatile=True)  # concat_img as input of Hiding net
-            cover_imgv = Variable(cover_img, volatile=True)  # cover_imgv as label of Hiding net
+        rev_secret_img = Rnet(container_img)  # containerImg as input of R-net and get "rev_secret_img"
+        secret_imgv = Variable(secret_img, volatile=True)  # secret_imgv as label of R-net
+        errR = criterion(rev_secret_img, secret_imgv)  # R-net reconstructed error
+        Rlosses.update(errR.item(), this_batch_size)
+        save_result_pic(this_batch_size, cover_img, container_img.data, secret_img, rev_secret_img.data, epoch, i,
+                        opt.testPics)
 
-            container_img = Hnet(concat_imgv)  # take concat_img as input of H-net and get the container_img
-            errH = criterion(container_img, cover_imgv)  # H-net reconstructed error
-            Hlosses.update(errH.item(), this_batch_size)
-
-            rev_secret_img = Rnet(container_img)  # containerImg as input of R-net and get "rev_secret_img"
-            secret_imgv = Variable(secret_img, volatile=True)  # secret_imgv as label of R-net
-            errR = criterion(rev_secret_img, secret_imgv)  # R-net reconstructed error
-            Rlosses.update(errR.item(), this_batch_size)
-
-
-            re_covers = F.interpolate(container_img,(756,1008))
-            re_secrets = F.interpolate(rev_secret_img,(128,128))
-            cover_img =  F.interpolate(cover_img,(756,1008))
-
-
-            for jk in range( len(re_covers) ):
-                imageio.imwrite( f'results2/re_cover_{cnt}.png', re_covers[jk].permute(1,2,0).cpu().numpy() )
-                imageio.imwrite( f'results2/re_secret_{cnt}.png', re_secrets[jk].permute(1,2,0).cpu().numpy() )
-                residual_map1 = unscaled_viridis_cmap( torch.abs(re_covers[jk]-cover_img[jk]).permute(1,2,0).cpu().numpy().mean(-1), scale=25)
-                residual_map2 = viridis_cmap( torch.abs(re_covers[jk]-cover_img[jk]).permute(1,2,0).cpu().numpy().mean(-1))
-                imageio.imwrite( f'results2/res25_cover_{cnt}.png',  residual_map1)
-                imageio.imwrite( f'results2/res_cover_{cnt}.png',  residual_map2)
-
-                cnt += 1
-
-
-            # save_result_pic(this_batch_size, cover_img, container_img.data, secret_img, rev_secret_img.data, epoch, i,
-            #                 opt.testPics)
-
-    print (cnt)
     val_hloss = Hlosses.avg
     val_rloss = Rlosses.avg
     val_sumloss = val_hloss + opt.beta * val_rloss
@@ -581,28 +490,19 @@ def print_log(log_info, log_path, console=True):
 
 
 # save result pics, coverImg filePath and secretImg filePath
-# def save_result_pic(this_batch_size, originalLabelv, ContainerImg, secretLabelv, RevSecImg, epoch, i, save_path):
-#     if not opt.debug:
-#         with torch.no_grad():
-#             # originalFrames = originalLabelv.clone().resize_(this_batch_size, 3, opt.imageH, opt.imageW)
-#             # containerFrames = ContainerImg.clone().resize_(this_batch_size, 3, opt.imageH, opt.imageW)
-#             # secretFrames = secretLabelv.clone().resize_(this_batch_size, 3, opt.imageH, opt.imageW)
-#             # revSecFrames = RevSecImg.clone().resize_(this_batch_size, 3, opt.imageH, opt.imageW)
-            
-#             re_covers = F.interpolte(ContainerImg,(756,1008))
-#             re_secrets = F.interpolte(ContainerImg,(128,128))
+def save_result_pic(this_batch_size, originalLabelv, ContainerImg, secretLabelv, RevSecImg, epoch, i, save_path):
+    if not opt.debug:
+        originalFrames = originalLabelv.resize_(this_batch_size, 3, opt.imageSize, opt.imageSize)
+        containerFrames = ContainerImg.resize_(this_batch_size, 3, opt.imageSize, opt.imageSize)
+        secretFrames = secretLabelv.resize_(this_batch_size, 3, opt.imageSize, opt.imageSize)
+        revSecFrames = RevSecImg.resize_(this_batch_size, 3, opt.imageSize, opt.imageSize)
 
-#             for i in range( len(re_covers) ):
-#                 imageio.imwrite( f'results/re_cover_' )
-
-            
-
-#             # showContainer = torch.cat([originalFrames, containerFrames], 0)
-#             # showReveal = torch.cat([secretFrames, revSecFrames], 0)
-#             # # resultImg contains four rows: coverImg, containerImg, secretImg, RevSecImg, total this_batch_size columns
-#             # resultImg = torch.cat([showContainer, showReveal], 0)
-#             # resultImgName = '%s/ResultPics_epoch%03d_batch%04d.png' % (save_path, epoch, i)
-#             # vutils.save_image(resultImg, resultImgName, nrow=this_batch_size, padding=1, normalize=True)
+        showContainer = torch.cat([originalFrames, containerFrames], 0)
+        showReveal = torch.cat([secretFrames, revSecFrames], 0)
+        # resultImg contains four rows: coverImg, containerImg, secretImg, RevSecImg, total this_batch_size columns
+        resultImg = torch.cat([showContainer, showReveal], 0)
+        resultImgName = '%s/ResultPics_epoch%03d_batch%04d.png' % (save_path, epoch, i)
+        vutils.save_image(resultImg, resultImgName, nrow=this_batch_size, padding=1, normalize=True)
 
 
 class AverageMeter(object):

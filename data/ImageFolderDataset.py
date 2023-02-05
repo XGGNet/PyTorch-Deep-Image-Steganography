@@ -100,11 +100,14 @@ class MyImageFolder(data.Dataset):
         for target in sorted(os.listdir(dir)):
             path = os.path.join(dir, target)
             image_list.append(path)
+            
 
         self.image_list=image_list
         self.loader=default_loader
         self.transform = transform
         self.len=len(image_list)
+
+
     def __getitem__(self, index):
         """
         Args:
@@ -115,10 +118,11 @@ class MyImageFolder(data.Dataset):
         """
         path = self.image_list[index]
         img = self.loader(path)
+
         if self.transform is not None:
             img = self.transform(img)
 
-        return img
+        return img, path
 
     def __len__(self):
         return self.len

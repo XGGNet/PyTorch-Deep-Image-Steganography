@@ -3,3 +3,5 @@
 *.pyc
 training/
 checkPoint/
+cover_images/
+.vscode/launch.json
